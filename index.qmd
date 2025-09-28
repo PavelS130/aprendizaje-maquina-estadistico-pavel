@@ -1,0 +1,375 @@
+---
+title: "Taller Bootstrap"
+author: "Pavel Santiago Hernández Hernández"
+format: html
+---
+
+## INTRODUCCIÓN
+
+Dentro del siguiente proyecto, tenemos como objetivo comprender el método bootstrap como herramienta de muestreo, todo esto siendo implementado en Julia. Además analizar que tan viable es aplicar bootstrap para estimar la incertidumbre de un modelo que predice si un sísmo pueda causar daños en viviendas.
+
+
+> 📌 Código fuente: [GitHub](https://github.com/PavelS130/AprendizajeMaquinaEst.git)
+
+## EXPLORANDO EL BOOTSTRAP
+Para comenzar, utilizaremos las siguientes librerías en Julia.
+```julia
+using Pkg
+Pkg.add([
+    "DataFrames","Random","Statistics","GLM","DecisionTree","MLJBase",
+    "CategoricalArrays","Plots","Distributions","MLJ","Combinatorics",
+    "MLJLinearModels","MLJDecisionTreeInterface","StatsPlots"
+])
+using Random, Statistics, DataFrames, GLM, DecisionTree
+using Plots, StatsPlots, Distributions, Combinatorics
+```
+```{julia}
+using Pkg
+Pkg.add([
+    "DataFrames","Random","Statistics","GLM","DecisionTree","MLJBase",
+    "CategoricalArrays","Plots","Distributions","MLJ","Combinatorics",
+    "MLJLinearModels","MLJDecisionTreeInterface","StatsPlots"
+])
+using Random, Statistics, DataFrames, GLM, DecisionTree
+using Plots, StatsPlots, Distributions, Combinatorics
+```
+
+En la siguiente parte, generamos un dataset simple de 3 elementos, "muestra", donde realizamos 
+remuestreos aleatorios con reemplazo.
+```{julia}
+# 1. Re-muestreo con reemplazo
+muestra = [5.2, 6.1, 7.0]
+n = length(muestra)
+
+function generar_remuestreos(muestra, tamaño)
+    return collect(with_replacement_combinations(muestra, tamaño))
+end
+
+remuestreos = generar_remuestreos(muestra, 3)
+
+println("Muestra original: ", muestra)
+println("Número de remuestreos posibles: ", length(remuestreos))
+println("Primeros 10 remuestreos:")
+for i in 1:min(10, length(remuestreos))
+    println(remuestreos[i])
+end
+```
+
+Optamos por usar una semilla aleatoria, para realizar simulaciones de aceleraciones sísmicas, 
+donde el tamaño de la simulación será de  $20$ observaciones con incrementos de $0.1$, además utilizamos una distribución LogNormal para generar datos entre $0$ y $1$.
+```{julia}
+# 2. Intervalos de confianza bootstrap (con gráficas)
+Random.seed!(123)
+
+# 2.1 Simular observaciones de aceleración sísmica (valores en g)
+n_obs = 20
+aceleraciones = rand(LogNormal(-1.5, 0.8), n_obs) .* 0.1  # escala realista
+
+# 2.2 Media original
+media_original = mean(aceleraciones)
+println("\nMedia original: ", round(media_original, digits=4), " g")
+```
+
+Posterior a obtener las $20$ simulaciones logramos obtener la media, de donde 
+se puede interpretar de la siguiente forma:
+
+```julia
+#0.01 g-0.05g se perciben pero casi no dañan
+#0.1g-0.2g pueden causar daños leves
+#0.3g-0.5g daños moderados
+#>0.5g daños severos
+```
+
+Declaramos la función bootstrap_ci, la cual recibe tres argumentos, un vector de datos,
+número de remuestreos a generar y un nivel de sigificancia para el intervaalo de confianza, en este caso será de $0.05$.
+
+```{julia}
+# 2.3 Bootstrap: función que devuelve medias bootstrap y IC
+function bootstrap_ci(data, n_bootstrap=1000, alpha=0.05)
+    n = length(data)
+    medias_bootstrap = Float64[]
+    for i in 1:n_bootstrap
+        muestra_bootstrap = rand(data, n)
+        push!(medias_bootstrap, mean(muestra_bootstrap))
+    end
+    lower = quantile(medias_bootstrap, alpha/2)
+    upper = quantile(medias_bootstrap, 1 - alpha/2)
+    return medias_bootstrap, (lower, upper)
+end
+```
+
+Este es el método percentil de bootstrap: usamos los percentiles empíricos de la distribución bootstrap para construir el intervalo de confianza.
+
+Despues, utilizaremos la función creada para realizar el metodo bootstrap para el vector
+de aceleraciones ya creado anteriormente, donde se realizaran $1000$ remuestreos y con un intervalo  de confianza $0.05$.
+```{julia}
+medias_bs, ci = bootstrap_ci(aceleraciones, 1000, 0.05)
+ci_media = ci  # (inferior, superior)
+
+println("Intervalo de confianza al 95%: (", round(ci_media[1], digits=4), ", ", round(ci_media[2], digits=4), ")")
+```
+Realizaremos la elaboración de los histogramas, el histograma muestra la distribución empírica de las aceleraciones
+```{julia}
+# ---------------------------
+# GRÁFICAS: Histogramas, Boxplot, Densidad y Convergencia del IC
+# ---------------------------
+# 1) Histograma de datos originales + media
+p1 = histogram(aceleraciones, bins=10, alpha=0.6, legend=:topright,
+               title="Distribución de Aceleraciones (datos originales)",
+               xlabel="Aceleración (g)", ylabel="Frecuencia", label="Datos",
+               size=(500, 400))
+vline!(p1, [media_original], line=:dash, linewidth=2, color=:black,
+       label="Media original = $(round(media_original, digits=4)) g")
+```
+Este histograma representa la distribución empírica de la estadística (la media) bajo remuestreo bootstrap.
+```{julia}
+# 2) Histograma de medias bootstrap + líneas de IC
+p2 = histogram(medias_bs, bins=30, alpha=0.6, legend=:topright,
+               title="Distribución de Medias Bootstrap",
+               xlabel="Media bootstrap (g)", ylabel="Frecuencia", label="Medias bootstrap",
+               size=(500, 400))
+vline!(p2, [ci_media[1]], line=:dash, linewidth=2, color=:red, label="IC 95% inferior")
+vline!(p2, [ci_media[2]], line=:dash, linewidth=2, color=:red, label="IC 95% superior")
+vline!(p2, [media_original], line=:solid, linewidth=3, color=:blue, label="Media original")
+```
+
+El boxplot resume de forma compacta la mediana, la variabilidad (IQR) y la existencia de valores extremos en medias_bs.
+
+Los puntos individuales ayudan a ver la densidad de observaciones y posibles agrupamientos que la caja sola no muestra.
+```{julia}
+# 3) Boxplot de medias bootstrap
+p3 = boxplot([medias_bs], labels=["Medias bootstrap"], title="Boxplot de Medias Bootstrap",
+             ylabel="Media (g)", legend=false, size=(500, 400))
+# Añadir puntos de medias individuales para visualizar dispersión
+scatter!(p3, ones(length(medias_bs)), medias_bs, alpha=0.3, markersize=2, label="Medias individuales")
+```
+La densidad muestra la forma (asimetría, multimodalidad) de la distribución bootstrap.
+```{julia}
+# 4) Densidad de medias bootstrap con sombreado del IC
+p4 = density(medias_bs, linewidth=2, label="Densidad medias bootstrap", 
+             title="Densidad y IC 95%", size=(500, 400))
+vspan!(p4, [ci_media[1], ci_media[2]], alpha=0.18, color=:red, label="IC 95%")
+vline!(p4, [mean(medias_bs)], line=:dash, linewidth=2, color=:black, label="Media bootstrap")
+
+# Mostrar las gráficas una tras otra
+display(p1)
+display(p2)
+display(p3)
+display(p4)
+```
+
+La siguiente función sirve para visualizar la convergencia de la estimación bootstrap:
+
+La media estimada debería estabilizarse alrededor de la media real.
+
+El IC $95\%$ debería estabilizarse a medida que n aumenta.
+```{julia}
+# Función para ver convergencia del IC con más remuestreos
+function evolucion_ic(data, max_bootstrap=1000, step=50)
+    ns = step:step:max_bootstrap #Crea un rango ns que va desde step hasta max_bootstrap en incrementos de step.
+    medias_parciales = Float64[]
+    ic_inferior = Float64[]
+    ic_superior = Float64[]
+    for n in ns
+        medias_temp = [mean(rand(data, length(data))) for _ in 1:n] #Genera n medias bootstrap
+        push!(medias_parciales, mean(medias_temp)) #Calcula la media de las medias bootstrap
+        push!(ic_inferior, quantile(medias_temp, 0.025)) #Calcula el percentil 2.5%
+        push!(ic_superior, quantile(medias_temp, 0.975)) #Calcula el percentil 97.5%
+    end
+    return ns, medias_parciales, ic_inferior, ic_superior
+end
+
+ns, medias_evol, ic_inf_evol, ic_sup_evol = evolucion_ic(aceleraciones, 1000, 50) #Hasta 1000 remuestreos en pasos de 50
+
+p_evol = plot(ns, medias_evol, ribbon=(medias_evol .- ic_inf_evol, ic_sup_evol .- medias_evol),
+              title="Convergencia del Intervalo de Confianza (media) vs n_remuestreos",
+              xlabel="Número de remuestreos bootstrap", ylabel="Media (g)", label="Media ± IC 95%")
+hline!(p_evol, [media_original], line=:dash, color=:red, label="Media original")
+display(p_evol)
+```
+Posterior a esto, realizamos un breve resumen del trabajo previo:
+```{julia}
+# Resumen numérico rápido
+println("\nResumen numérico :")
+println("  Media original: ", round(media_original, digits=4), " g") #Indica que, en promedio, la aceleración de los sismos registrados es baja (0.0225 g), lo que correspondería a movimientos que raramente dañan viviendas.
+println("  Media de medias bootstrap: ", round(mean(medias_bs), digits=4), " g") #Indica que el valor promedio de las medias obtenidas a través del método bootstrap es ligeramente mayor (0.0231 g) que la media original, sugiriendo un pequeño sesgo en la estimación.
+println("  Sesgo (bootstrap - original): ", round(mean(medias_bs) - media_original, digits=5), " g") #El sesgo es negativo pero muy pequeño (0.00015 g), indicando que la media bootstrap tiende a sobreestimar ligeramente la media original.
+println("  Error estándar bootstrap: ", round(std(medias_bs), digits=5), " g") #La incertidumbre sobre la aceleración media es reducida
+println("  IC 95%: (", round(ci_media[1], digits=4), ", ", round(ci_media[2], digits=4), ") g")
+```
+Donde:
+- **La media original** es el promedio de la aceleración sísmica observada en la muestra simulada (20 datos en este caso).
+
+- **Media de medias bootstrap** es el promedio de las medias calculadas en los 1000 remuestreos bootstrap, casi idéntico a la media original (0.0225 g), lo cual indica que el bootstrap no introduce un sesgo importante en la estimación de la media. 
+
+- **Sesgo** es la diferencia entre la media bootstrap y la media original. Un sesgo de –0.00015 g es prácticamente nulo, esto confirma que el bootstrap es un método insesgado para estimar la media.
+
+- **Error estándar bootstrap** es la desviación estándar de las medias bootstrap, esto mide la variabilidad de la estimación.
+
+- **IC $95\%$** aunque el promedio observado es 0.0225 g, el verdadero valor puede fluctuar dentro de ese rango.
+
+## BOOTSTRAP EN MACHINE LEARNING
+
+Generamos 3 dataset, donde se simularán los parametros de un sísmo, los cuales son: profundidad en la que se genera un sísmo, maginitud en escala Richter, entre $4.0$ y $9.0$ y distancía a la que se localiza.
+```{julia}
+Random.seed!(123)
+n_samples = 200
+
+# 3. Dataset sintético para regresión logística
+profundidad = rand(Uniform(5, 100), n_samples)
+magnitud   = rand(Uniform(4.0, 9.0), n_samples)
+distancia  = rand(Uniform(10, 300), n_samples)
+```
+
+En el siguiente código, generamos un modelo logístico donde podremos simular 
+los daños a viviendas que puedan ser causadas por los datos de la simmulación anterior. Donde 
+se hacen uso de los siguientes coeficientes:
+
+- **Magnitud($0.1$)** A mayor magnitud aumenta la probabilidad de daños.
+
+- **Distancia($-0.02$)** A mayor distancia del epicentro, menor probabilidad de daños.
+
+- **Profundidad($-0.01$)** Sismos más profundos tienden a producir menos daños superficiales.
+
+- **Intercepto ($3$)** Ajusta el modelo para que, incluso en condiciones promedio, la probabilidad base de daño no sea demasiado baja.
+
+```{julia}
+prob_daño = @. 1 / (1 + exp(-(0.1*magnitud - 0.02*distancia - 0.01*profundidad +3))) 
+#Simula un modelo logístico donde la probabilidad 
+#de daños en viviendas dependiendo de magnitud, distancia, profundidad del sismo y un intercepto.
+
+daño = rand(n_samples) .< prob_daño
+
+df = DataFrame(
+    profundidad=profundidad,
+    magnitud=magnitud,
+    distancia=distancia,
+    daño=Int.(daño)
+)
+```
+El siguiente ajuste reproduce, a partir de un dataset sintético, la lógica esperada en fenómenos sísmicos, al usar bootstrap después, podremos analizar cómo varían estos coeficientes si el modelo se entrena en diferentes remuestreos de los datos.
+```{julia}
+# 3.2 Ajustar regresión logística en datos originales
+modelo_original = glm(@formula(daño ~ profundidad + magnitud + distancia),
+                     df, Binomial(), LogitLink())
+#Queremos modelar la variable dependiente daño (0 = no, 1 = sí) en función de las variables independientes.
+
+println("\nCoeficientes del modelo original:")
+println(coef(modelo_original))
+```
+
+En lugar de remuestrear solo datos individuales, aquí se remuestrean observaciones completas (profundidad, magnitud, distancia, daño).
+Se vuelve a ajustar el modelo en cada réplica y se observa cómo cambian los coeficientes.
+```{julia}
+# 3.3 Bootstrap de coeficientes
+function bootstrap_coeficientes(data, formula, n_bootstrap=100)
+    n = nrow(data)
+    coefs = []
+    for i in 1:n_bootstrap
+        idx_bootstrap = rand(1:n, n) #selecciona n observaciones CON reemplazo
+        df_bootstrap = data[idx_bootstrap, :] #construye un dataset re-muestreado
+        try
+            modelo = glm(formula, df_bootstrap, Binomial(), LogitLink()) #ajusta el modelo
+            push!(coefs, coef(modelo)) #almacena los coeficientes
+        catch
+            continue # si el modelo falla (no converge), pasa al siguiente ciclo
+        end
+    end
+    return coefs
+end
+```
+- **Intercepto (1.929):** Representa la tendencia base de daño cuando profundidad, magnitud y distancia son cero (no tiene interpretación física directa, pero sirve como ajuste base en el modelo logístico).
+- **Profundidad (-0.0121):** En promedio, un aumento en la profundidad está ligeramente asociado con mayor probabilidad de daño, aunque el valor es pequeño → su influencia es débil.
+- **Magnitud (0.136):** El coeficiente más alto y positivo → confirma que la magnitud del sismo es el factor más determinante para la probabilidad de daño.
+- **Distancia (-0.0167):** El valor es positivo pero muy pequeño → indica que la variable distancia no tiene un efecto fuerte en este modelo (en la simulación original se esperaba negativo, pero el remuestreo puede alterar signos si la señal es débil o hay variabilidad alta).
+
+```{julia}
+#se obtuvieron 100 vectores de coeficientes de modelos ajustados
+coefs_bootstrap = bootstrap_coeficientes(df, @formula(daño ~ profundidad + magnitud + distancia), 100)
+#se unieron todos en una matriz
+coefs_matrix = reduce(hcat, coefs_bootstrap)'
+#se calculó la media bootstrap de cada coeficiente.
+media_coefs = mean(coefs_matrix, dims=1)
+#se calculó la desviación estándar bootstrap de cada coeficiente.
+std_coefs  = std(coefs_matrix, dims=1)
+
+println("\nVariabilidad de coeficientes (media ± desviación estándar):")
+for (i, name) in enumerate(["Intercept", "Profundidad", "Magnitud", "Distancia"])
+    println("$name: ", round(media_coefs[i], digits=4), " ± ", round(std_coefs[i], digits=4))
+end
+```
+## BAGGING (BOOTSTRAP AGGREGATING)
+
+Para esta parte crearemos una matriz númerica con las columnas que son las caracteristicas que se usará para entrenar el árbol. Mientras que el vector $y$ será el vector que el árbol deba predecir.
+
+```{julia}
+
+X = Matrix(df[:, [:profundidad, :magnitud, :distancia]])
+y = Vector(df.daño)
+```
+
+El siguiente bloque entrena un árbol de decisión con 3 features y profundidad máxima 3. El árbol clasifica correctamente el 75.5% de los ejemplos de entrenamiento. Esa cifra es un primer indicador pero optimista — hay que validar en datos nuevos.
+
+```{julia}
+# Árbol individual
+arbol_entrenado = build_tree(y, X, 0, 3)#Entrena un árbol de decisión
+pred_original = apply_tree(arbol_entrenado, X) #Aplica el árbol entrenado sobre la misma matriz X, y obtiene las predicciones para cada fila
+accuracy_original = mean(pred_original .== y) #Calcula la exactitud del árbol individual
+println("\nAccuracy de un solo árbol : ", round(accuracy_original, digits=4))
+#el árbol clasifica correctamente el 75.5% de las observaciones del conjunto de entrenamiento
+#con n_samples = 200, eso son ≈ 151 predicciones correctas y 49 incorrectas (0.755 × 200 ≈ 151).
+```
+
+El siguiente paso (bagging) busca mejorar esa estabilidad y rendimiento mediante remuestreo y votación. Bagging usa bootstrap para producir modelos diversos y luego votarlos: esto reduce la incertidumbre del predictor (más estable), que es exactamente lo que buscas cuando cuantificas incertidumbre en modelos que predicen si un terremoto dañará viviendas.
+```{julia}
+# Bagging
+function bagging_classifier(X, y, n_estimators=500, sample_ratio=0.8)
+    n_samples = size(X, 1) #Calcula el número de filas (observaciones) de X.
+    arboles = []
+    for i in 1:n_estimators
+        idx = rand(1:n_samples, Int(round(n_samples * sample_ratio))) #Genera un remuestreo con reemplazo de índices.
+        #Construye el dataset bootstrap usando los índices muestreados
+        X_bootstrap = X[idx, :]
+        y_bootstrap = y[idx]
+        arbol = build_tree(y_bootstrap, X_bootstrap, 0, 3) #Entrena un árbol de decisión con el dataset bootstrap.
+        push!(arboles, arbol) #Añade el árbol entrenado al vector arboles.
+    end
+    return arboles
+end
+
+function predict_bagging(arboles, X)
+    n_arboles = length(arboles)
+    predicciones = zeros(size(X,1))
+    for arbol in arboles
+        pred = apply_tree(arbol, X) #produce un vector de predicciones (0/1) sobre X
+        predicciones .+= pred #Se suma ese vector al acumulador predicciones. 
+        #Así cada posición contiene el número de árboles que votaron por la clase 1.
+    end
+    return Int.(predicciones .> (n_arboles / 2))
+    #Convierte el conteo de votos en predicción final por votación mayoritaria
+end
+```
+
+El uso de bagging + bootstrap en árboles de decisión aporta mayor robustez y estabilidad en la predicción de daños ocasionados por terremotos.
+
+```{julia}
+arboles_bagging = bagging_classifier(X, y, 500)
+pred_bagging = predict_bagging(arboles_bagging, X)
+accuracy_bagging = mean(pred_bagging .== y)
+
+println("Accuracy del ensamble bagging: ", round(accuracy_bagging, digits=4))
+println("Mejora (puntos porcentuales): ", round((accuracy_bagging - accuracy_original) * 100, digits=2), "%")
+
+println("\nAnálisis de desempeño (conteos):")
+println("Árbol individual - Verdaderos positivos: ", sum((pred_original .== 1) .& (y .== 1)))
+println("Árbol individual - Falsos positivos: ", sum((pred_original .== 1) .& (y .== 0)))
+println("Bagging - Verdaderos positivos: ", sum((pred_bagging .== 1) .& (y .== 1)))
+println("Bagging - Falsos positivos: ", sum((pred_bagging .== 1) .& (y .== 0)))
+```
+
+## CONCLUSIÓN
+
+- El árbol individual puede ser más útil si se prioriza no dejar pasar daños reales (aunque se generen más falsas alarmas).
+- El bagging es preferible cuando se busca un balance más confiable y menos ruidoso, asegurando que las alertas de daño estén mejor fundamentadas y evitando sobrecargar el sistema con demasiados casos falsos.
+
+
